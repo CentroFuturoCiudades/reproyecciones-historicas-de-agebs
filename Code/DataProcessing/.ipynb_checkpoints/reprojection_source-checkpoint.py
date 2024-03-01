@@ -14,6 +14,37 @@ def load_mpios_metropoli(mpios_metropoli_path):
     mpios_en_metropoli['CVE_ENT'] = mpios_en_metropoli['CVEGEO'].str[:2]
     mpios_en_metropoli['CVE_MUN'] = mpios_en_metropoli['CVEGEO'].str[2:5]
     return mpios_en_metropoli
+
+def load_agebs_1990(agebs_1990_path):
+    # Leer las AGEBs
+    agebs_1990  = gpd.read_file(agebs_1990_path)
+
+    # Procesamiento de AGEBs
+    agebs_1990["CVEGEO"] = agebs_1990["CVE_ENT"] + agebs_1990["CVE_MUN"] + agebs_1990["CVE_LOC"] + agebs_1990["CVE_AGEB"]
+    return agebs_1990
+
+def load_censo_1990(censo_1990_path):
+    # Cargar el censo 19990
+    census_1990 = pd.read_csv(censo_1990_path)
+
+    # Elimina valores faltantes y modifica el formato de MUN, LOC para obtener el CVEGEO
+    census_1990 = census_1990.dropna()
+    census_1990['MUN'] = census_1990['MUN'].astype(int)
+    census_1990['LOC'] = census_1990['LOC'].astype(int)
+    census_1990['MUN']     = census_1990['MUN'].apply(lambda x: f'{x:03d}')
+    census_1990['LOC']     = census_1990['LOC'].apply(lambda x: f'{x:04d}')
+    census_1990['CVEGEO']  = census_1990['ENT'] + census_1990['MUN'] + census_1990['LOC'] + census_1990['AGEB']
+    census_1990.rename(columns={'Población total':'POBTOT'}, inplace = True)
+    return census_1990
+
+def filter_censo_1990(agebs_1990, censo_1990_cleaned, zona_metropolitana, cols):
+    agebs_1990_filtered = pd.merge(zona_metropolitana, agebs_1990, on=['CVE_ENT', 'CVE_MUN'], how='inner')
+    agebs_1990_filtered = gpd.GeoDataFrame(agebs_1990_filtered, geometry='geometry')
+    agebs_1990_filtered.crs = agebs_1990.crs
+    
+    censo_1990_filtered = agebs_1990_filtered.merge(censo_1990_cleaned, on='CVEGEO', how='left')
+    censo_1990_filtered = censo_1990_filtered[cols]
+    return censo_1990_filtered
     
 def load_censo_2000(agebs_2000_path):
     # Carga del censo 2000 (agebs y censo)
@@ -134,7 +165,7 @@ def filter_censo_2020(agebs_2020, censo_2020_cleaned, zona_metropolitana, cols):
     return censo_2020_filtered[cols]
 
 def save_censo(censo, year, PLACE, path_data_processed):
-    file_path = path_data_processed + "censo_"+str(year)+"_"+PLACE["NOM_MUN"].lower()+".shp"
+    file_path = path_data_processed + "censo_"+str(year)+"_"+PLACE.lower()+".shp"
     censo.to_file(file_path, driver='ESRI Shapefile')
 
 
@@ -191,7 +222,7 @@ def load_malla(ageb_file, malla_path):
     )
     return malla_geo
 
-def make_plots_pob(place_2000, place_2010, place_2020, result_df, PLACE_NAME, path_data_modeling, path_data_raw):
+def make_plots_pob(place_1990, place_2000, place_2010, place_2020, result_df, PLACE_NAME, path_data_modeling, path_data_raw):
     # Encontrar el valor máximo de población en cualquiera de los años
     max_population = result_df[['poblacion_proyectada_2000', 'poblacion_proyectada_2010', 'poblacion_proyectada_2020']].max().max()
     
@@ -215,7 +246,7 @@ def make_plots_pob(place_2000, place_2010, place_2020, result_df, PLACE_NAME, pa
     start_point = gpd.GeoDataFrame(geometry=[Point(pnt_metro[0], pnt_metro[1])], crs="EPSG:4326")
     
     # Obtener el bounding box alrededor del punto (5 km a la redonda)
-    buffer_distance_km = 10
+    buffer_distance_km = 25
     buffer_geometry = start_point.buffer(buffer_distance_km / 111.32).geometry.iloc[0]  # Extraer la geometría
     
     # Convertir el bounding box a un GeoDataFrame en EPSG:4326
@@ -242,13 +273,13 @@ def make_plots_pob(place_2000, place_2010, place_2020, result_df, PLACE_NAME, pa
                                                                 legend_kwds=legend_kwds, 
                                                                 norm=Normalize(0, max_population), alpha = 0.6)
     place_2020.to_crs("EPSG:6365").plot(ax=ax, color='none', edgecolor='black', linewidth=0.25, alpha = 0.25)  # Contorno de las AGEBs sin color
-    ctx.add_basemap(ax, crs=result_df.crs, zoom=10, source=ctx.providers.OpenStreetMap.Mapnik)
+    ctx.add_basemap(ax, crs=result_df.crs, source='https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png?api_key=a1b11e3f-26c1-414c-8c58-1f8b74f719d0')
     ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
     plt.title('Población Proyectada de {} en 2020 por Celda de Malla'.format(PLACE_NAME))
     ax.set_xticks([])  # Eliminar marcas del eje x
     ax.set_yticks([])  # Eliminar marcas del eje y
-    #ax.set_xlim(xmin, xmax)
-    #ax.set_ylim(ymin, ymax)
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
     plt.savefig(path_data_modeling+PLACE_NAME.lower()+'_poblacion_2020.png')
     plt.show()
     
@@ -262,13 +293,13 @@ def make_plots_pob(place_2000, place_2010, place_2020, result_df, PLACE_NAME, pa
                                                                 legend_kwds=legend_kwds, 
                                                                 norm=Normalize(0, max_population), alpha = 0.6)
     place_2010.to_crs("EPSG:6365").plot(ax=ax, color='none', edgecolor='black', linewidth=0.25, alpha = 0.25)  # Contorno de las AGEBs sin color
-    ctx.add_basemap(ax, crs=result_df.crs, zoom=10, source=ctx.providers.OpenStreetMap.Mapnik)
+    ctx.add_basemap(ax, crs=result_df.crs, source='https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png?api_key=a1b11e3f-26c1-414c-8c58-1f8b74f719d0')
     ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
     plt.title('Población Proyectada de {} en 2010 por Celda de Malla'.format(PLACE_NAME))
     ax.set_xticks([])  # Eliminar marcas del eje x
     ax.set_yticks([])  # Eliminar marcas del eje y
-    #ax.set_xlim(xmin, xmax)
-    #ax.set_ylim(ymin, ymax)
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
     plt.savefig(path_data_modeling+PLACE_NAME.lower()+'_poblacion_2010.png')
     plt.show()
     
@@ -280,13 +311,32 @@ def make_plots_pob(place_2000, place_2010, place_2020, result_df, PLACE_NAME, pa
                                                                 linewidth=0.25, legend=True, ax=ax, 
                                                                 legend_kwds=legend_kwds, norm=Normalize(0, max_population), alpha = 0.6)
     place_2000.to_crs("EPSG:6365").plot(ax=ax, color='none', edgecolor='black', linewidth=0.25, alpha = 0.25)  # Contorno de las AGEBs sin color
-    ctx.add_basemap(ax, crs=result_df.crs, zoom=10, source=ctx.providers.OpenStreetMap.Mapnik)
+    ctx.add_basemap(ax, crs=result_df.crs, source='https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png?api_key=a1b11e3f-26c1-414c-8c58-1f8b74f719d0')
     ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
     plt.title('Población Proyectada de {} en 2000 por Celda de Malla'.format(PLACE_NAME))
     ax.set_xticks([])  # Eliminar marcas del eje x
     ax.set_yticks([])  # Eliminar marcas del eje y
-    #ax.set_xlim(xmin, xmax)
-    #ax.set_ylim(ymin, ymax)
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
+    plt.savefig(path_data_modeling+PLACE_NAME.lower()+'_poblacion_2000.png')
+    plt.show()
+
+
+    # Gráfico para 2000
+    fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+    # cmap='YlOrBr'
+    result_df[result_df['poblacion_proyectada_1990'] != 0].plot(column='poblacion_proyectada_1990', 
+                                                                edgecolor='lightgray', cmap=nuevo_colormap, 
+                                                                linewidth=0.25, legend=True, ax=ax, 
+                                                                legend_kwds=legend_kwds, norm=Normalize(0, max_population), alpha = 0.6)
+    place_1990.to_crs("EPSG:6365").plot(ax=ax, color='none', edgecolor='black', linewidth=0.25, alpha = 0.25)  # Contorno de las AGEBs sin color
+    ctx.add_basemap(ax, crs=result_df.crs, source='https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png?api_key=a1b11e3f-26c1-414c-8c58-1f8b74f719d0')
+    ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
+    plt.title('Población Proyectada de {} en 1990 por Celda de Malla'.format(PLACE_NAME))
+    ax.set_xticks([])  # Eliminar marcas del eje x
+    ax.set_yticks([])  # Eliminar marcas del eje y
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
     plt.savefig(path_data_modeling+PLACE_NAME.lower()+'_poblacion_2000.png')
     plt.show()
 
@@ -295,7 +345,7 @@ def make_plots_dif(place_2020, result_df, PLACE_NAME, zona_metropolitana,path_da
     
     # Encontrar el valor máximo absoluto de la diferencia para normalizar el colormap
     #max_diff = abs(result_df['diferencia_2020_2010']).max()
-    max_diff = abs(result_df['diferencia_2020_2000'].min())
+    max_diff = abs(result_df['diferencia_2020_1990'].min())
 
     # Coordenadas del punto objetivo
     ghsl_metro = pd.read_csv(path_data_raw+'GHS_STAT_UCDB2015MT_GLOBE_R2019A/GHS_STAT_UCDB2015MT_GLOBE_R2019A_V1_3.csv')
@@ -303,7 +353,7 @@ def make_plots_dif(place_2020, result_df, PLACE_NAME, zona_metropolitana,path_da
     pnt_metro  = ghsl_metro.GCPNT_LON, ghsl_metro.GCPNT_LAT
     start_point = gpd.GeoDataFrame(geometry=[Point(pnt_metro[0], pnt_metro[1])], crs="EPSG:4326")
     buffer_geometry = start_point.buffer(5 / 111.32).geometry.iloc[0]
-    buffer_geometry_limit = start_point.buffer(20 / 111.32).geometry.iloc[0]
+    buffer_geometry_limit = start_point.buffer(25 / 111.32).geometry.iloc[0]
 
     # Convertir el bounding box a un GeoDataFrame en EPSG:4326
     bbox = gpd.GeoDataFrame(geometry=[buffer_geometry_limit], crs="EPSG:4326")
@@ -354,6 +404,35 @@ def make_plots_dif(place_2020, result_df, PLACE_NAME, zona_metropolitana,path_da
     plt.savefig(path_data_modeling+PLACE_NAME.lower()+'_grafico_diferencia_2020_2010.png')
     plt.show()
     """
+
+    # Configuración de la gráfica para Diferencia 2020-2010
+    fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+    
+    # Encontrar el valor máximo absoluto de la diferencia para normalizar el colormap
+    #max_diff = abs(result_df['diferencia_2020_2000']).max()
+    #max_diff = abs(result_df['diferencia_2020_2000'].min())
+
+    ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
+    
+    # Asignar colores a los valores negativos y positivos utilizando un colormap divergente (RdBu)
+    result_df.plot(column='diferencia_2020_2010', cmap='RdBu', edgecolor='white', linewidth=0.25,
+                   norm=Normalize(-max_diff, max_diff), legend=True, ax=ax, legend_kwds={'aspect': 20}, alpha = 0.6)
+
+    ctx.add_basemap(ax, crs=result_df.crs, source='https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png?api_key=a1b11e3f-26c1-414c-8c58-1f8b74f719d0')
+    print(result_df.crs)
+    #buffer_geometry_gdf.boundary.plot(color = 'black', edgecolor = 'black', ax = ax)
+    #zona_metropolitana.to_crs(result_df.crs).plot(ax=ax, color='none', edgecolor='black', linewidth=0.25, alpha = 0.25) 
+    ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
+    #place_2020.to_crs("EPSG:6365").boundary.plot(ax=ax, color='none', edgecolor='black', linewidth=0.7)  # Contorno de las AGEBs sin color
+    ax.set_xticks([])  # Eliminar marcas del eje x
+    ax.set_yticks([])  # Eliminar marcas del eje y
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)    
+    plt.title('Diferencia de Población 2020-2010 en {}'.format(PLACE_NAME))
+    plt.savefig(path_data_modeling+PLACE_NAME.lower()+'_grafico_diferencia_2020_2010.png')
+    plt.show()
+
+    
     
     # Configuración de la gráfica para Diferencia 2020-2000
     fig, ax = plt.subplots(1, 1, figsize=(15, 15))
@@ -368,17 +447,103 @@ def make_plots_dif(place_2020, result_df, PLACE_NAME, zona_metropolitana,path_da
     result_df.plot(column='diferencia_2020_2000', cmap='RdBu', edgecolor='white', linewidth=0.25,
                    norm=Normalize(-max_diff, max_diff), legend=True, ax=ax, legend_kwds={'aspect': 20}, alpha = 0.6)
 
-    ctx.add_basemap(ax, crs=result_df.crs, zoom=10, source=ctx.providers.OpenStreetMap.Mapnik)
+    ctx.add_basemap(ax, crs=result_df.crs, source='https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png?api_key=a1b11e3f-26c1-414c-8c58-1f8b74f719d0')
     print(result_df.crs)
-    buffer_geometry_gdf.boundary.plot(color = 'black', edgecolor = 'black', ax = ax)
+    #buffer_geometry_gdf.boundary.plot(color = 'black', edgecolor = 'black', ax = ax)
     #zona_metropolitana.to_crs(result_df.crs).plot(ax=ax, color='none', edgecolor='black', linewidth=0.25, alpha = 0.25) 
     ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
     #place_2020.to_crs("EPSG:6365").boundary.plot(ax=ax, color='none', edgecolor='black', linewidth=0.7)  # Contorno de las AGEBs sin color
     ax.set_xticks([])  # Eliminar marcas del eje x
     ax.set_yticks([])  # Eliminar marcas del eje y
-    #ax.set_xlim(xmin, xmax)
-    #ax.set_ylim(ymin, ymax)    
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)    
     plt.title('Diferencia de Población 2020-2000 en {}'.format(PLACE_NAME))
     plt.savefig(path_data_modeling+PLACE_NAME.lower()+'_grafico_diferencia_2020_2000.png')
+    plt.show()
+
+
+    # Configuración de la gráfica para Diferencia 2020-1990
+    fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+    
+    # Encontrar el valor máximo absoluto de la diferencia para normalizar el colormap
+    #max_diff = abs(result_df['diferencia_2020_2000']).max()
+    #max_diff = abs(result_df['diferencia_2020_2000'].min())
+
+    ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
+    
+    # Asignar colores a los valores negativos y positivos utilizando un colormap divergente (RdBu)
+    result_df.plot(column='diferencia_2020_1990', cmap='RdBu', edgecolor='white', linewidth=0.25,
+                   norm=Normalize(-max_diff, max_diff), legend=True, ax=ax, legend_kwds={'aspect': 20}, alpha = 0.6)
+
+    ctx.add_basemap(ax, crs=result_df.crs, source='https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png?api_key=a1b11e3f-26c1-414c-8c58-1f8b74f719d0')
+    print(result_df.crs)
+    #buffer_geometry_gdf.boundary.plot(color = 'black', edgecolor = 'black', ax = ax)
+    #zona_metropolitana.to_crs(result_df.crs).plot(ax=ax, color='none', edgecolor='black', linewidth=0.25, alpha = 0.25) 
+    ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
+    #place_2020.to_crs("EPSG:6365").boundary.plot(ax=ax, color='none', edgecolor='black', linewidth=0.7)  # Contorno de las AGEBs sin color
+    ax.set_xticks([])  # Eliminar marcas del eje x
+    ax.set_yticks([])  # Eliminar marcas del eje y
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)    
+    plt.title('Diferencia de Población 2020-1990 en {}'.format(PLACE_NAME))
+    plt.savefig(path_data_modeling+PLACE_NAME.lower()+'_grafico_diferencia_2020_1990.png')
+    plt.show()
+
+
+    # Configuración de la gráfica para Diferencia 2000-1990
+    fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+    
+    # Encontrar el valor máximo absoluto de la diferencia para normalizar el colormap
+    #max_diff = abs(result_df['diferencia_2020_2000']).max()
+    #max_diff = abs(result_df['diferencia_2020_2000'].min())
+
+    ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
+    
+    # Asignar colores a los valores negativos y positivos utilizando un colormap divergente (RdBu)
+    result_df.plot(column='diferencia_2000_1990', cmap='RdBu', edgecolor='white', linewidth=0.25,
+                   norm=Normalize(-max_diff, max_diff), legend=True, ax=ax, legend_kwds={'aspect': 20}, alpha = 0.6)
+
+    #ctx.add_basemap(ax, crs=result_df.crs, zoom=10, source=ctx.providers.Stamen.TonerLite)
+    #ctx.add_basemap(ax, crs=result_df.crs, zoom=10, source=ctx.providers.Esri.WorldGrayCanvas)
+    ctx.add_basemap(ax, crs=result_df.crs, source='https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png?api_key=a1b11e3f-26c1-414c-8c58-1f8b74f719d0')
+    
+    print(result_df.crs)
+    #buffer_geometry_gdf.boundary.plot(color = 'black', edgecolor = 'black', ax = ax)
+    #zona_metropolitana.to_crs(result_df.crs).plot(ax=ax, color='none', edgecolor='black', linewidth=0.25, alpha = 0.25) 
+    ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
+    #place_2020.to_crs("EPSG:6365").boundary.plot(ax=ax, color='none', edgecolor='black', linewidth=0.7)  # Contorno de las AGEBs sin color
+    ax.set_xticks([])  # Eliminar marcas del eje x
+    ax.set_yticks([])  # Eliminar marcas del eje y
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)    
+    plt.title('Diferencia de Población 2000-1990 en {}'.format(PLACE_NAME))
+    plt.savefig(path_data_modeling+PLACE_NAME.lower()+'_grafico_diferencia_2000_1990.png')
+    plt.show()
+
+    # Configuración de la gráfica para Diferencia 2010-2000
+    fig, ax = plt.subplots(1, 1, figsize=(15, 15))
+    
+    # Encontrar el valor máximo absoluto de la diferencia para normalizar el colormap
+    #max_diff = abs(result_df['diferencia_2020_2000']).max()
+    #max_diff = abs(result_df['diferencia_2020_2000'].min())
+
+    ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
+    
+    # Asignar colores a los valores negativos y positivos utilizando un colormap divergente (RdBu)
+    result_df.plot(column='diferencia_2010_2000', cmap='RdBu', edgecolor='white', linewidth=0.25,
+                   norm=Normalize(-max_diff, max_diff), legend=True, ax=ax, legend_kwds={'aspect': 20}, alpha = 0.6)
+
+    ctx.add_basemap(ax, crs=result_df.crs, source='https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png?api_key=a1b11e3f-26c1-414c-8c58-1f8b74f719d0')
+    print(result_df.crs)
+    #buffer_geometry_gdf.boundary.plot(color = 'black', edgecolor = 'black', ax = ax)
+    #zona_metropolitana.to_crs(result_df.crs).plot(ax=ax, color='none', edgecolor='black', linewidth=0.25, alpha = 0.25) 
+    ax.scatter([target_x], [target_y], marker=(5, 1), c='red', s=200, zorder=5)
+    #place_2020.to_crs("EPSG:6365").boundary.plot(ax=ax, color='none', edgecolor='black', linewidth=0.7)  # Contorno de las AGEBs sin color
+    ax.set_xticks([])  # Eliminar marcas del eje x
+    ax.set_yticks([])  # Eliminar marcas del eje y
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)    
+    plt.title('Diferencia de Población 2010-2000 en {}'.format(PLACE_NAME))
+    plt.savefig(path_data_modeling+PLACE_NAME.lower()+'_grafico_diferencia_2010_2000.png')
     plt.show()
 
